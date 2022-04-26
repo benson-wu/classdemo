@@ -1,0 +1,352 @@
+---
+title: "HW 7"
+author: "Benson Wu"
+date: "11/22/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(survival)
+library(KMsurv)
+library(dplyr)
+```
+
+
+# Problem 8.12
+
+```{r}
+#Load data
+data("std") 
+```
+
+```{r}
+model1 <- coxph(Surv(time, rinfct)~  race + marital + age + yschool + 
+                   npartner + os12m + rs12m + factor(condom) + abdpain + 
+                   discharge + dysuria + itch + lesion + rash + lymph + 
+                   factor(iinfct) , data = std, ties = "breslow")
+
+#Use the step algorithm to find the most predictive factors 
+step(model1)
+
+
+```
+
+
+```{r}
+
+model1_step <- coxph(Surv(time, rinfct) ~ yschool + npartner + os12m + 
+                      factor(condom) + abdpain + factor(iinfct), 
+                      data = std, ties = "breslow")
+summary(model1_step)
+```
+
+
+
+After the step algorithm, years of schooling, oral sex within 12 months, abdominal pain, and having chlamydia were significant predictors of time until reinfection. 
+
+
+# Problem 9.3
+
+## Part A
+```{r}
+time <-c(1, 63, 105, 129, 182, 216, 250, 262, 301, 301, 342, 354,
+356, 358, 380, 383, 383, 388, 394, 408, 460, 489, 499, 523,
+524, 535, 562, 569, 675, 676, 748, 778, 786, 797, 955, 968,
+1000, 1245, 1271, 1420, 1551, 1694, 2363, 2754, 2950,
+17, 42, 44, 48, 60, 72, 74, 95, 103, 108, 122, 144,
+167, 170, 183, 185, 193, 195, 197, 208, 234, 235, 254, 307,
+315, 401, 445, 464, 484, 528, 542, 547, 577, 580, 795, 855,
+1366, 1577, 2060, 2412, 2486, 2796, 2802, 2934, 2988)
+delta <- c(rep(1, 43), rep(0,2),rep(1, 39), rep(0,6))
+treatment <- c(rep("chemo",45), rep("radio",45))
+
+df <- as.data.frame(cbind(time, delta, treatment))
+
+df$time <- as.numeric(df$time)
+df$delta <- as.numeric(df$delta)
+
+model1 <- coxph(Surv(time, delta)~factor(treatment), 
+                  data = df, ties = "breslow")
+summary(model1)
+
+
+# 95% confidence interval
+round(exp((model1$coef[1]+c(-1,1)*1.96*sqrt(model1$var[1,1]))),6)
+```
+We fail to reject the null that the survival is different between the two treatment regimes. 
+
+## Part B
+
+```{r}
+df$treatment_indicator <- ifelse(df$treatment=="chemo",1,0)
+
+
+event.times <- sort(unique(df$time[df$delta == 1]))
+
+#restructure the data into a counting process-like dataset
+df_restructured <- survSplit(data = df, cut = event.times, end = "time", start = 't0', event = "delta")
+
+#Create time dependent covariate
+df_restructured$tdc <- df_restructured$treatment_indicator*log(df_restructured$time)
+
+model2<- coxph(Surv(t0, time, delta)~ treatment + tdc, 
+                  data = df_restructured, ties = "breslow")
+summary(model2)
+
+#Testing b2 = 0
+C  <- c(0, 1)
+b0 <- c(0, 0)
+b  <- model2$coefficients
+V  <- model2$var
+wald <- t(C %*% b - C %*% b0) %*% solve(t(C) %*% V %*% C) %*% (C %*% b - C %*% b0)
+round(cbind(wald, 1-pchisq(wald, 1)),6)
+```
+
+
+## Part C
+
+```{r}
+#Pg. 306
+loglik <- as.numeric(length(event.times))
+
+#Warnings may occur due to X being singular. (that is a problem with this method)
+for(i in 1:length(event.times)){
+  df_restructured$tdc1 <- ifelse(df_restructured$time > event.times[i], df_restructured$treatment, 0)
+  fit <- coxph(Surv(t0, time, delta) ~ treatment + tdc1, data = df_restructured, ties = 'breslow')
+  loglik[i] <- fit$loglik[2]
+}
+
+cbind(event.times, loglik)
+opt_tau <- event.times[which.max(loglik)]
+opt_tau
+```
+
+## Part D
+
+```{r}
+df_restructured$Z1 <- ifelse(df_restructured$time > opt_tau, df_restructured$treatment_indicator, 0)
+df_restructured$Z2 <- ifelse(df_restructured$time <= opt_tau, df_restructured$treatment_indicator, 0)
+
+model3 <- coxph(Surv(t0, time, delta) ~  Z1 + Z2, data = df_restructured, ties = 'breslow')
+summary(model3)
+```
+The RR of Z1 is 1.894 and the RR of Z2 is 0.241. In model A, the RR was 1.113 for those who received radiotherapy. 
+
+
+# Question 9.5
+
+## Part A
+```{r}
+data(larynx) 
+larynx <- larynx %>% 
+          mutate(diag_before75 = ifelse(diagyr<75, 1, 0))
+model1 <- coxph(Surv(time, delta) ~  age + factor(stage) + strata(diag_before75),
+                data = larynx, ties = 'breslow')
+summary(model1)
+```
+
+## Part B
+
+```{r}
+after75 <- larynx %>% filter(diag_before75==0)
+before75 <- larynx %>% filter(diag_before75==1)
+
+fit0 <- coxph(Surv(time, delta) ~  age + factor(stage) + strata(diag_before75), data = after75, ties = 'breslow') 
+fit1 <- coxph(Surv(time, delta) ~  age + factor(stage) + strata(diag_before75), data = before75, ties = 'breslow')
+X2 <- -2*(model1$loglik[2] - (fit0$loglik[2] + fit1$loglik[2]))
+X2
+1 - pchisq(X2, df = 4)
+```
+Fail to reject the null.
+
+## Part C
+#Perform Wald Test
+```{r}
+
+C  <- rbind(c(1, 0, 0, 0, -1, 0, 0, 0),
+                 c(0, 1, 0, 0, 0, -1, 0, 0),
+                 c(0, 0, 1, 0, 0, 0, -1, 0),
+                 c(0, 0, 0, 1, 0, 0, 0, -1))
+b0 <- c(0, 0, 0, 0, 0, 0, 0, 0)
+b <- c(fit0$coefficients, fit1$coefficients)
+V <- rbind(cbind(fit0$var, matrix(0, nrow = nrow(fit1$var),
+                                          ncol = ncol(fit1$var))),
+                 cbind(matrix(0, nrow = nrow(fit1$var),
+                              ncol = ncol(fit0$var)), fit1$var)
+                 ) 
+1 - pchisq(t(C %*% b- C %*% b0) %*% 
+             solve(C %*% V%*% t(C)) %*% 
+             (C %*% b- C %*% b0), 4)
+
+```
+
+We also fail to reject the null.
+
+
+
+# Problem 9.8
+
+## Part A
+```{r}
+data("burn")
+
+cut.points <- sort(unique(burn$T3[burn$D3 == 1]))
+burn_restructured <- survSplit(data = burn, cut = cut.points, end = "T3", start = 't0', event = "D3")
+
+burn_restructured$tdw <- ifelse(burn_restructured$T3 >= burn_restructured$T1 & burn_restructured$D1 == 1, 1, 0)
+
+model1 <- coxph(Surv(t0, T3, D3) ~ Z1 + Z2 + Z3 + tdw, data = burn_restructured, ties = 'breslow')
+summary(model1)
+```
+
+
+## Part B
+```{r}
+#Create a TDC
+burn_restructured$tdc_1 <- ifelse(burn_restructured$T3 >= burn_restructured$T2 & burn_restructured$D2 == 1, 1, 0)
+
+model2 <- coxph(Surv(t0, T3, D3) ~ Z1 + Z2 + Z3 + tdc_1, data = burn_restructured, ties = 'breslow')
+summary(model2)
+```
+
+## Part C
+```{r}
+model3 <- coxph(Surv(t0, T3, D3) ~ Z1 + Z2 + Z3 + Z4 + Z5 +Z6 + Z7 + Z8 + Z9 + Z10 + factor(Z11) + tdc_1 + tdw, data = burn_restructured, ties = 'breslow')
+
+step(model3)
+```
+
+```{r}
+#Final model 
+model4 <- coxph(formula = Surv(t0, T3, D3) ~ Z1 + Z2 + Z3 + factor(Z11), 
+    data = burn_restructured, ties = "breslow")
+summary(model4)
+```
+## Part D
+Make an inference about the time until infection among those individuals who had a prophylactic antibiotic treatment administered.
+Adjust for all other explanatory covariates, as needed. Test for proportional hazards, and deal with any variables with nonproportional hazards, as you deem appropriate.
+```{r}
+burn_restructured_anti <- filter(burn_restructured, D2==1)
+model5 <- coxph(Surv(t0, T3, D3) ~ Z1 + Z2 + Z3 + Z4 + Z5 + 
+                  Z6 + Z7 + Z8 + Z9 + Z10 + factor(Z11) + 
+                  tdc_1 + tdw, data = burn_restructured_anti, ties = 'breslow')
+step(model5)
+
+#Final model 
+summary(coxph(Surv(t0, T3, D3) ~ Z5 + Z6 + Z9 + tdc_1, data = burn_restructured_anti, ties = 'breslow'))
+```
+
+
+# Question 11.1
+```{r}
+data("larynx") 
+```
+
+## Part C
+```{r}
+model1 <- coxph(Surv(time,delta) ~ factor(stage) + age, data = larynx, 
+                method = 'breslow')
+
+
+#Get Cox-Snell residual based on Martingale residuals
+mg.residual <- resid(model1, type = "martingale")
+cs.residual <- larynx$delta - mg.residual
+
+#Graphical Plot
+fit.cs <- survfit(Surv(cs.residual, larynx$delta) ~ 1) #Get Kaplan-Meier estiamtes
+H.cs   <- cumsum(fit.cs$n.event/fit.cs$n.risk)
+plot(fit.cs$time, H.cs, type='s', col='blue', 
+     main = 'Cox-Snell Residual Plot', 
+     xlab = 'Residual', ylab = 'Nelson-Aalen Cum. Hazard') 
+#Note here that 'time' is the value of the Cox-Snell residual
+abline(0, 1, col='red',  lty = 2)
+```
+
+
+# Question 11.3
+
+## Part A
+```{r}
+data("larynx")
+
+model1 <- basehaz(coxph(Surv(time,delta) ~ strata(factor(stage)) + age, data = larynx,  method = 'breslow'))
+model1
+
+plot(log(model1$hazard[model1$strata == 1])~ model1$time[model1$strata == 1], type = 's',
+     ylab = 'Log Cumulative Hazard', xlab = 'Time', main = 'Log H(t) vs. Time',
+     col = 'blue', lty = 1, xlim = c(0, 11), ylim = c(-5, 5))
+lines(log(model1$hazard[model1$strata == 2]) ~  model1$time[model1$strata == 2],
+      col = 'red', lty = 2, type = 's')
+lines(log(model1$hazard[model1$strata == 3]) ~  model1$time[model1$strata == 3],
+      col = 'green', lty = 3, type = 's')
+lines(log(model1$hazard[model1$strata == 4]) ~  model1$time[model1$strata == 4],
+      col = 'black', lty = 4, type = 's')
+legend('bottomright', c('Stage 1', 'Stage 2', "Stage 3", "Stage 4"), col = c('blue', 'red', "green", "black"), lty = c(1,2,3,4), bty = 'n')
+```
+
+
+## Part B
+```{r}
+H1 <- model1$hazard[model1$strata == 1]
+H2 <- model1$hazard[model1$strata == 2]
+H3 <- model1$hazard[model1$strata == 3]
+H4 <- model1$hazard[model1$strata == 4]
+
+t1 <- model1$time[model1$strata == 1]
+t2 <- model1$time[model1$strata == 2]
+t3 <- model1$time[model1$strata == 3]
+t4 <- model1$time[model1$strata == 4]
+
+plot(log(H2) - log(H1[1:15]) ~ t2, main = 'Log H(t) differences', ylab = 'Log Cumulative Hazard', xlab = 'Time', type = 's', xlim = c(0, 10), ylim = c(-4, 4))
+lines(log(H3) - log(H1[1:23]) ~ t3,
+      col = 'blue', lty = 3, type = 's')
+lines(log(H4) - H1[1:12] ~ t4,
+      col = 'green', lty = 3, type = 's')
+legend('bottomright', c('Stage 2 - Stage 1', "Stage 3 - Stage 1", "Stage 4 - Stage 1"), col = c('black', "blue", "green"), lty = c(1, 2,3), bty = 'n')
+```
+
+
+## Part C
+```{r}
+reptime <- function(l, t){
+  x <- numeric(max(t))
+  for(i in min(t):max(t)){
+    diff <- i - t
+    diff <- diff[diff >= 0]
+    x[i] <- l[which.min(diff)]
+  }
+  return(x)
+}
+
+H1 <- model1$hazard[model1$strata == 1]
+H2 <- model1$hazard[model1$strata == 2]
+H3 <- model1$hazard[model1$strata == 3]
+H4 <- model1$hazard[model1$strata == 4]
+t1 <- model1$time[model1$strata == 1]
+t2 <- model1$time[model1$strata == 2]
+t3 <- model1$time[model1$strata == 3]
+t4 <- model1$time[model1$strata == 4]
+
+H1 <- reptime(H1, t1)
+H2 <- reptime(H2, t2)
+H3 <- reptime(H3, t3)
+H4 <- reptime(H4, t4)
+
+
+plot(H2[1:15] ~ H1[1:15], main = 'Anderson Plot', ylab = 'Cumulative Hazard', xlab = 'Cumulative Hazard', type = 's', xlim = c(0, 1), ylim = c(0, 1))
+lines(H3[1:23] ~ H1[1:23],
+      col = 'blue', lty = 3, type = 's')
+lines(H4[1:12] ~ H1[1:12],
+      col = 'green', lty = 3, type = 's')
+abline(0, 1, col='red',  lty=2)
+legend('bottomright', c('Stage 2', "Stage 3", "Stage 4"), col = c('black', "blue", "green"), lty = c(1, 2,3), bty = 'n')
+```
+
